@@ -4,7 +4,7 @@
 # https://github.com/enavid/wg-manager
 # =============================================================================
 
-set -eo pipefail
+set -euo pipefail
 
 REPO="https://raw.githubusercontent.com/enavid/wg-manager/main"
 INSTALL_PATH="/usr/local/bin/wg-manager"
