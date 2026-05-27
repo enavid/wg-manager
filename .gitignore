@@ -1,0 +1,7 @@
+# Sensitive files — never commit private keys or client configs
+wg-manager.conf
+clients/
+
+# OS
+.DS_Store
+Thumbs.db
