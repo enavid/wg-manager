@@ -5,7 +5,7 @@ Lightweight CLI tool to manage WireGuard peers for server-to-server VPN setups.
 ## Install
 
 ```bash
-sudo bash <(curl -Ls https://raw.githubusercontent.com/enavid/wg-manager/main/install.sh)
+curl -Ls https://raw.githubusercontent.com/enavid/wg-manager/main/install.sh | sudo bash
 ```
 
 ## Features
