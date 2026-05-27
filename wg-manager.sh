@@ -4,7 +4,9 @@
 # https://github.com/enavid/wg-manager
 # =============================================================================
 
-set -euo pipefail
+set -eo pipefail
+
+VERSION="1.2.0"
 
 # --- Paths ---
 DATA_DIR="/etc/wg-manager"
@@ -12,23 +14,16 @@ CONFIG_FILE="${DATA_DIR}/wg-manager.conf"
 CLIENTS_DIR="${DATA_DIR}/clients"
 WG_CONF=""
 
-# --- Colors ---
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-BOLD='\033[1m'
-NC='\033[0m'
+REPO_RAW="https://raw.githubusercontent.com/enavid/wg-manager/main"
 
 # =============================================================================
 # Utility
 # =============================================================================
 
-log_info()    { echo -e "${GREEN}[INFO]${NC}  $*"; }
-log_warn()    { echo -e "${YELLOW}[WARN]${NC}  $*"; }
-log_error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; }
-log_section() { echo -e "\n${BOLD}${BLUE}==> $*${NC}"; }
+log_info()    { echo "[INFO]  $*"; }
+log_warn()    { echo "[WARN]  $*"; }
+log_error()   { echo "[ERROR] $*" >&2; }
+log_section() { echo ""; echo "==> $*"; }
 
 require_root() {
     if [[ $EUID -ne 0 ]]; then
@@ -50,7 +45,7 @@ require_config() {
 
 check_dependencies() {
     local missing=()
-    for cmd in wg wg-quick ip iptables; do
+    for cmd in wg wg-quick ip iptables curl; do
         command -v "$cmd" &>/dev/null || missing+=("$cmd")
     done
     if [[ ${#missing[@]} -gt 0 ]]; then
@@ -108,19 +103,45 @@ cmd_init() {
         [[ "${confirm,,}" == "y" ]] || { log_info "Aborted."; exit 0; }
     fi
 
-    local default_iface
-    default_iface=$(ip route show default 2>/dev/null | awk '/default/ {print $5; exit}')
+    # Auto-detect values
+    local detected_iface detected_ip
+    detected_iface=$(ip route show default 2>/dev/null | awk '/default/ {print $5; exit}')
+    detected_ip=$(ip route show default 2>/dev/null | awk '/default/ {print $9; exit}')
+
+    # If local IP detected, try to get public IP
+    if [[ -z "$detected_ip" ]] || [[ "$detected_ip" =~ ^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.) ]]; then
+        detected_ip=$(curl -s --max-time 5 ifconfig.me 2>/dev/null || \
+                      curl -s --max-time 5 icanhazip.com 2>/dev/null || \
+                      echo "")
+    fi
 
     echo ""
-    echo -e "${CYAN}Server Configuration${NC}"
+    echo "Server Configuration"
     echo "--------------------"
-    read -rp "Server public IP                    : " input_server_ip
-    read -rp "WireGuard listen port        [51820] : " input_port;         input_port="${input_port:-51820}"
-    read -rp "VPN subnet           [10.10.10.0/24] : " input_subnet;       input_subnet="${input_subnet:-10.10.10.0/24}"
-    read -rp "Server VPN IP           [10.10.10.1] : " input_server_vpn;   input_server_vpn="${input_server_vpn:-10.10.10.1}"
-    read -rp "Public network interface  [${default_iface}] : " input_iface; input_iface="${input_iface:-$default_iface}"
-    read -rp "WireGuard interface name        [wg0] : " input_wg_iface;    input_wg_iface="${input_wg_iface:-wg0}"
-    read -rp "Client DNS server           [8.8.8.8] : " input_dns;         input_dns="${input_dns:-8.8.8.8}"
+    echo "Detected interface : ${detected_iface:-not found}"
+    echo "Detected public IP : ${detected_ip:-not found}"
+    echo ""
+
+    read -rp "Server public IP        [${detected_ip}] : " input_server_ip
+    input_server_ip="${input_server_ip:-$detected_ip}"
+
+    read -rp "WireGuard listen port          [51820] : " input_port
+    input_port="${input_port:-51820}"
+
+    read -rp "VPN subnet             [10.10.10.0/24] : " input_subnet
+    input_subnet="${input_subnet:-10.10.10.0/24}"
+
+    read -rp "Server VPN IP             [10.10.10.1] : " input_server_vpn
+    input_server_vpn="${input_server_vpn:-10.10.10.1}"
+
+    read -rp "Network interface    [${detected_iface}] : " input_iface
+    input_iface="${input_iface:-$detected_iface}"
+
+    read -rp "WireGuard interface name         [wg0] : " input_wg_iface
+    input_wg_iface="${input_wg_iface:-wg0}"
+
+    read -rp "Client DNS server            [8.8.8.8] : " input_dns
+    input_dns="${input_dns:-8.8.8.8}"
 
     log_section "Generating Server Keys"
     local server_priv server_pub
@@ -176,9 +197,9 @@ EOF
     fi
 
     echo ""
-    echo -e "${GREEN}${BOLD}Server initialized successfully.${NC}"
-    echo -e "  Public Key : ${CYAN}${server_pub}${NC}"
-    echo -e "  Endpoint   : ${CYAN}${input_server_ip}:${input_port}${NC}"
+    echo "Server initialized successfully."
+    echo "  Public Key : ${server_pub}"
+    echo "  Endpoint   : ${input_server_ip}:${input_port}"
     echo ""
     echo "Run 'wg-manager add <name>' to add your first peer."
 }
@@ -245,19 +266,19 @@ EOF
     chmod 600 "$client_conf"
 
     echo ""
-    echo -e "${GREEN}${BOLD}============================================================${NC}"
-    echo -e "${GREEN}${BOLD}  Peer '${client_name}' created — paste this on the client server${NC}"
-    echo -e "${GREEN}${BOLD}============================================================${NC}"
+    echo "============================================================"
+    echo "  Peer '${client_name}' created — paste this on the client server"
+    echo "============================================================"
     echo ""
-    echo -e "${CYAN}Save to: /etc/wireguard/${WG_INTERFACE}.conf${NC}"
+    echo "Save to: /etc/wireguard/${WG_INTERFACE}.conf"
     echo ""
     cat "$client_conf"
     echo ""
-    echo -e "${YELLOW}Commands to run on the CLIENT server:${NC}"
-    echo "  sudo apt install wireguard wireguard-tools"
-    echo "  sudo nano /etc/wireguard/${WG_INTERFACE}.conf   # paste config above"
-    echo "  sudo systemctl enable --now wg-quick@${WG_INTERFACE}"
-    echo "  sudo wg show"
+    echo "Commands to run on the CLIENT server:"
+    echo "  apt install wireguard wireguard-tools"
+    echo "  nano /etc/wireguard/${WG_INTERFACE}.conf   # paste config above"
+    echo "  systemctl enable --now wg-quick@${WG_INTERFACE}"
+    echo "  wg show"
     echo ""
 }
 
@@ -312,7 +333,7 @@ cmd_list() {
     log_section "Registered Peers"
 
     local found=false
-    for conf in "${CLIENTS_DIR}"/*.conf 2>/dev/null; do
+    for conf in "${CLIENTS_DIR}"/*.conf; do
         [[ -f "$conf" ]] && { found=true; break; }
     done
 
@@ -321,8 +342,8 @@ cmd_list() {
         return
     fi
 
-    printf "\n${BOLD}%-20s %-18s %s${NC}\n" "NAME" "VPN IP" "CREATED"
-    printf "%-20s %-18s %s\n" "----" "------" "-------"
+    printf "\n%-20s %-18s %s\n" "NAME" "VPN IP" "CREATED"
+    printf "%-20s %-18s %s\n"   "----" "------" "-------"
 
     for conf in "${CLIENTS_DIR}"/*.conf; do
         [[ -f "$conf" ]] || continue
@@ -335,7 +356,7 @@ cmd_list() {
 
     echo ""
     if systemctl is-active --quiet "wg-quick@${WG_INTERFACE}" 2>/dev/null; then
-        echo -e "${CYAN}Live WireGuard status:${NC}"
+        echo "Live WireGuard status:"
         wg show "${WG_INTERFACE}" 2>/dev/null || true
     else
         log_warn "WireGuard interface '${WG_INTERFACE}' is not running."
@@ -356,7 +377,7 @@ cmd_show() {
     [[ ! -f "$client_conf" ]] && { log_error "Peer '${client_name}' not found."; exit 1; }
 
     echo ""
-    echo -e "${BOLD}${CYAN}Config for peer '${client_name}':${NC}"
+    echo "Config for peer '${client_name}':"
     echo "------------------------------------------------------------"
     cat "$client_conf"
     echo "------------------------------------------------------------"
@@ -370,6 +391,7 @@ cmd_status() {
     require_config
 
     log_section "Server Status"
+    printf "  %-20s %s\n" "Version:"         "${VERSION}"
     printf "  %-20s %s\n" "Server IP:"       "${SERVER_IP}"
     printf "  %-20s %s\n" "Endpoint:"        "${SERVER_IP}:${SERVER_PORT}"
     printf "  %-20s %s\n" "VPN Subnet:"      "${VPN_SUBNET}"
@@ -380,12 +402,45 @@ cmd_status() {
 
     echo ""
     if systemctl is-active --quiet "wg-quick@${WG_INTERFACE}" 2>/dev/null; then
-        echo -e "  Status               : ${GREEN}Running${NC}"
+        echo "  Status               : Running"
         wg show "${WG_INTERFACE}" 2>/dev/null || true
     else
-        echo -e "  Status               : ${RED}Stopped${NC}"
+        echo "  Status               : Stopped"
         echo "  Run: systemctl start wg-quick@${WG_INTERFACE}"
     fi
+}
+
+# =============================================================================
+# update
+# =============================================================================
+
+cmd_update() {
+    require_root
+
+    log_section "Updating wg-manager"
+
+    local remote_version
+    remote_version=$(curl -fsSL --max-time 10 "${REPO_RAW}/wg-manager.sh" 2>/dev/null \
+        | grep -oP '(?<=^VERSION=")[^"]+' | head -1)
+
+    if [[ -z "$remote_version" ]]; then
+        log_error "Could not fetch remote version. Check your internet connection."
+        exit 1
+    fi
+
+    echo "  Installed : ${VERSION}"
+    echo "  Available : ${remote_version}"
+
+    if [[ "$remote_version" == "$VERSION" ]]; then
+        log_info "Already up to date."
+        exit 0
+    fi
+
+    log_info "Downloading version ${remote_version}..."
+    curl -fsSL --max-time 30 "${REPO_RAW}/wg-manager.sh" -o /usr/local/bin/wg-manager
+    chmod +x /usr/local/bin/wg-manager
+
+    log_info "Updated successfully: ${VERSION} -> ${remote_version}"
 }
 
 # =============================================================================
@@ -395,32 +450,34 @@ cmd_status() {
 cmd_help() {
     cat <<EOF
 
-${BOLD}wg-manager${NC} - WireGuard peer manager
+wg-manager v${VERSION} - WireGuard peer manager
 
-${BOLD}USAGE${NC}
+USAGE
     wg-manager <command> [arguments]
 
-${BOLD}COMMANDS${NC}
+COMMANDS
     init                Initialize the WireGuard server
     add   <name>        Add a new peer
     remove <name>       Remove a peer
     list                List all peers and live WireGuard status
     show  <name>        Print the client config for a peer
     status              Show server info and WireGuard status
+    update              Update wg-manager to the latest version
     help                Show this help message
 
-${BOLD}EXAMPLES${NC}
+EXAMPLES
     sudo wg-manager init
     sudo wg-manager add server-de-01
     sudo wg-manager list
     sudo wg-manager show server-de-01
     sudo wg-manager remove server-de-01
+    sudo wg-manager update
 
-${BOLD}FILES${NC}
+FILES
     /etc/wg-manager/wg-manager.conf     Server settings
     /etc/wg-manager/clients/            Saved peer configs
 
-${BOLD}PROJECT${NC}
+PROJECT
     https://github.com/enavid/wg-manager
 
 EOF
@@ -437,6 +494,7 @@ case "${1:-help}" in
     list)    cmd_list ;;
     show)    cmd_show "${2:-}" ;;
     status)  cmd_status ;;
+    update)  cmd_update ;;
     help|--help|-h) cmd_help ;;
     *)
         log_error "Unknown command: '${1}'"
